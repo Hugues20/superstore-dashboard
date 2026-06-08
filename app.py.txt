@@ -1,0 +1,271 @@
+# ============================================
+# APP.PY - VERSION POUR RENDER.COM
+# ============================================
+
+import pandas as pd
+import numpy as np
+import plotly.express as px
+from dash import Dash, dcc, html
+import os
+
+# Chargement - Adapter le chemin pour Render
+df = pd.read_csv("C:/Users/HP/Desktop/Business Analysis/SuperStore Sales/Superstore.csv", 
+                 encoding='latin-1')
+
+# Nettoyage
+df['Order Date'] = pd.to_datetime(df['Order Date'], format='%d-%m-%Y', errors='coerce')
+df['Ship Date'] = pd.to_datetime(df['Ship Date'], format='%d-%m-%Y', errors='coerce')
+df = df.dropna(subset=['Order Date'])
+
+# Creation des colonnes
+df['Profit_Margin'] = (df['Profit'] / df['Sales']) * 100
+df['Year'] = df['Order Date'].dt.year
+df['Month'] = df['Order Date'].dt.month
+df['Month_Name'] = df['Order Date'].dt.strftime('%b')
+df['Discount_Category'] = pd.cut(df['Discount'], 
+                                  bins=[-0.001, 0.10, 0.20, 0.30, 1.0],
+                                  labels=['0-10% Safe', '10-20% Optimal', 
+                                          '20-30% Dangerous', '>30% Critical'])
+
+# Calculs des indicateurs
+nb_annees = df['Year'].nunique()
+total_sales = df['Sales'].sum()
+total_profit = df['Profit'].sum()
+avg_margin = df['Profit_Margin'].mean()
+loss_transactions = len(df[df['Profit'] < 0])
+loss_percentage = (loss_transactions / len(df)) * 100
+critical_discount_loss = df[df['Discount'] > 0.20]['Profit'].sum()
+
+# Agrégations
+profit_by_category = df.groupby('Category')['Profit'].sum().reset_index()
+profit_by_segment = df.groupby('Segment')['Profit'].sum().reset_index()
+top_losing = df[df['Profit'] < 0].groupby('Sub-Category')['Profit'].sum().sort_values().head(5).reset_index()
+
+# Analyse des remises
+discount_analysis = df.groupby('Discount_Category', observed=False).agg({
+    'Profit_Margin': 'mean',
+    'Sales': 'sum',
+    'Profit': 'sum'
+}).reset_index()
+discount_analysis.columns = ['Discount_Category', 'Avg_Margin_Pct', 'Total_Sales', 'Total_Profit']
+
+# Serie temporelle
+time_series = df.groupby(['Year', 'Month'])['Profit'].sum().reset_index()
+time_series['Date'] = pd.to_datetime(time_series['Year'].astype(str) + '-' + 
+                                      time_series['Month'].astype(str) + '-01')
+
+# Calculs des gains (donnees reelles)
+remise_excessive = df[df['Discount'] > 0.20]
+ca_excess_annuel = remise_excessive['Sales'].sum() / nb_annees
+perte_excess_annuelle = remise_excessive['Profit'].sum() / nb_annees
+taux_conservation = 0.50
+gain_option_c = (abs(perte_excess_annuelle) * taux_conservation) + (ca_excess_annuel * taux_conservation * 0.175)
+
+tables_data = df[df['Sub-Category'] == 'Tables']
+bookcases_data = df[df['Sub-Category'] == 'Bookcases']
+ca_tables_annuel = tables_data['Sales'].sum() / nb_annees
+ca_bookcases_annuel = bookcases_data['Sales'].sum() / nb_annees
+taux_reduction = 0.10
+gain_option_b = (ca_tables_annuel * taux_reduction) + (ca_bookcases_annuel * taux_reduction)
+
+segment_analysis = df.groupby('Segment')['Profit_Margin'].mean()
+consumer_margin = segment_analysis.get('Consumer', 0)
+corporate_margin = segment_analysis.get('Corporate', 0)
+ca_consumer_annuel = df[df['Segment'] == 'Consumer']['Sales'].sum() / nb_annees
+margin_gap = corporate_margin - consumer_margin
+gain_option_a = ca_consumer_annuel * (margin_gap / 100) * 0.20
+
+total_gain = gain_option_c + gain_option_b + gain_option_a
+
+# Creation de l'application Dash
+app = Dash(__name__, title='SuperStore Analytics')
+server = app.server  # Important pour Render
+
+app.layout = html.Div(
+    style={
+        'backgroundColor': '#0a0e27',
+        'minHeight': '100vh',
+        'padding': '15px',
+        'fontFamily': 'Segoe UI, Arial, sans-serif'
+    },
+    children=[
+        # Header
+        html.Div(
+            style={'backgroundColor': '#1a1f3a', 'padding': '15px 20px', 'borderRadius': '10px', 'marginBottom': '15px'},
+            children=[
+                html.H1('SuperStore Sales Analytics Dashboard',
+                       style={'color': '#ffffff', 'margin': '0', 'fontSize': '20px'}),
+                html.Div(
+                    style={'color': '#8888aa', 'marginTop': '5px', 'fontSize': '12px'},
+                    children=[
+                        f"Period: {df['Order Date'].min().strftime('%b %Y')} - {df['Order Date'].max().strftime('%b %Y')}",
+                        f" | Critical Discount Threshold: 20%"
+                    ]
+                )
+            ]
+        ),
+        
+        # Row 1: KPI Cards
+        html.Div(
+            style={'display': 'grid', 'gridTemplateColumns': 'repeat(4, 1fr)', 'gap': '12px', 'marginBottom': '15px'},
+            children=[
+                html.Div(
+                    style={'backgroundColor': '#1a1f3a', 'padding': '15px', 'borderRadius': '10px',
+                           'textAlign': 'center', 'borderLeft': '3px solid #00d4ff'},
+                    children=[
+                        html.Div('TOTAL SALES', style={'color': '#8888aa', 'fontSize': '11px'}),
+                        html.Div(f"${total_sales/1000:.0f}K", 
+                                style={'color': '#00d4ff', 'fontSize': '28px', 'fontWeight': 'bold'}),
+                        html.Div(f"{len(df):,} transactions", style={'color': '#555577', 'fontSize': '10px'})
+                    ]
+                ),
+                html.Div(
+                    style={'backgroundColor': '#1a1f3a', 'padding': '15px', 'borderRadius': '10px',
+                           'textAlign': 'center', 'borderLeft': '3px solid #4ecdc4'},
+                    children=[
+                        html.Div('TOTAL PROFIT', style={'color': '#8888aa', 'fontSize': '11px'}),
+                        html.Div(f"${total_profit/1000:.0f}K", 
+                                style={'color': '#4ecdc4', 'fontSize': '28px', 'fontWeight': 'bold'}),
+                        html.Div(f"Margin: {avg_margin:.1f}%", style={'color': '#555577', 'fontSize': '10px'})
+                    ]
+                ),
+                html.Div(
+                    style={'backgroundColor': '#1a1f3a', 'padding': '15px', 'borderRadius': '10px',
+                           'textAlign': 'center', 'borderLeft': '3px solid #ff6b6b'},
+                    children=[
+                        html.Div('LOSS TRANSACTIONS', style={'color': '#8888aa', 'fontSize': '11px'}),
+                        html.Div(f"{loss_transactions:,}", 
+                                style={'color': '#ff6b6b', 'fontSize': '28px', 'fontWeight': 'bold'}),
+                        html.Div(f"{loss_percentage:.1f}% of total", style={'color': '#555577', 'fontSize': '10px'})
+                    ]
+                ),
+                html.Div(
+                    style={'backgroundColor': '#1a1f3a', 'padding': '15px', 'borderRadius': '10px',
+                           'textAlign': 'center', 'borderLeft': '3px solid #ff4444'},
+                    children=[
+                        html.Div('LOSS FROM >20% DISCOUNT', style={'color': '#8888aa', 'fontSize': '11px'}),
+                        html.Div(f"${critical_discount_loss/1000:.0f}K", 
+                                style={'color': '#ff4444', 'fontSize': '28px', 'fontWeight': 'bold'}),
+                        html.Div(f"Over {nb_annees} years", style={'color': '#555577', 'fontSize': '10px'})
+                    ]
+                )
+            ]
+        ),
+        
+        # Row 2: Charts
+        html.Div(
+            style={'display': 'grid', 'gridTemplateColumns': 'repeat(3, 1fr)', 'gap': '12px', 'marginBottom': '15px'},
+            children=[
+                dcc.Graph(
+                    figure=px.bar(profit_by_category, x='Category', y='Profit',
+                                  color='Profit', color_continuous_scale='RdYlGn',
+                                  text_auto='.0f', title='Profit by Category'
+                    ).update_layout(paper_bgcolor='#1a1f3a', plot_bgcolor='#1a1f3a',
+                                    font_color='#cccccc', title_font_color='#ffffff',
+                                    margin=dict(l=10, r=10, t=40, b=10)
+                    ).update_traces(textposition='outside')
+                ),
+                dcc.Graph(
+                    figure=px.pie(profit_by_segment, values='Profit', names='Segment',
+                                  title='Profit by Customer Segment',
+                                  color_discrete_sequence=['#00d4ff', '#4ecdc4', '#ff6b6b'], hole=0.4
+                    ).update_layout(paper_bgcolor='#1a1f3a', plot_bgcolor='#1a1f3a',
+                                    font_color='#cccccc', title_font_color='#ffffff',
+                                    margin=dict(l=10, r=10, t=40, b=10))
+                ),
+                dcc.Graph(
+                    figure=px.bar(top_losing, x='Profit', y='Sub-Category', orientation='h',
+                                  color='Profit', color_continuous_scale='Reds_r',
+                                  title='Top 5 Loss-Making Sub-Categories', text_auto='.0f'
+                    ).update_layout(paper_bgcolor='#1a1f3a', plot_bgcolor='#1a1f3a',
+                                    font_color='#cccccc', title_font_color='#ffffff',
+                                    margin=dict(l=10, r=10, t=40, b=10),
+                                    xaxis_title="Loss Amount ($)", yaxis_title=""
+                    ).update_traces(textposition='outside')
+                )
+            ]
+        ),
+        
+        # Row 3: Discount Analysis + Time Series
+        html.Div(
+            style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '12px', 'marginBottom': '15px'},
+            children=[
+                dcc.Graph(
+                    figure=px.bar(discount_analysis, x='Discount_Category', y='Avg_Margin_Pct',
+                                  color='Avg_Margin_Pct', color_continuous_scale='RdYlGn',
+                                  text='Avg_Margin_Pct',
+                                  title='Critical: Average Margin by Discount Range'
+                    ).add_hline(y=0, line_dash="dash", line_color="red",
+                                annotation_text="Profitability Threshold"
+                    ).update_layout(paper_bgcolor='#1a1f3a', plot_bgcolor='#1a1f3a',
+                                    font_color='#cccccc', title_font_color='#ff6b6b',
+                                    title_font_size=14, margin=dict(l=10, r=10, t=50, b=10),
+                                    yaxis_title="Average Margin (%)", xaxis_title="Discount Range"
+                    ).update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+                ),
+                dcc.Graph(
+                    figure=px.line(time_series, x='Date', y='Profit', title='Profit Evolution (Monthly)', markers=True
+                    ).update_layout(paper_bgcolor='#1a1f3a', plot_bgcolor='#1a1f3a',
+                                    font_color='#cccccc', title_font_color='#ffffff',
+                                    margin=dict(l=10, r=10, t=40, b=10),
+                                    xaxis_title="Date", yaxis_title="Profit ($)"
+                    ).update_traces(line_color='#00d4ff', line_width=2,
+                                    marker_color='#ff6b6b', marker_size=6
+                    ).add_hline(y=0, line_dash="dash", line_color="gray")
+                )
+            ]
+        ),
+        
+        # Row 4: Recommendations
+        html.Div(
+            style={'backgroundColor': '#1a1f3a', 'padding': '15px 20px', 'borderRadius': '10px', 'borderLeft': '4px solid #00d4ff'},
+            children=[
+                html.H4('Strategic Recommendations (Based on Actual Data)',
+                       style={'color': '#00d4ff', 'margin': '0 0 10px 0', 'fontSize': '14px'}),
+                html.Div(
+                    style={'display': 'grid', 'gridTemplateColumns': 'repeat(3, 1fr)', 'gap': '15px'},
+                    children=[
+                        html.Div([
+                            html.Div('Option C: Discount Optimization',
+                                   style={'color': '#ff6b6b', 'fontWeight': 'bold', 'marginBottom': '5px'}),
+                            html.Ul(style={'margin': '0', 'paddingLeft': '20px', 'color': '#cccccc', 'fontSize': '11px'},
+                                   children=[
+                                       html.Li('Cap discounts at 20% maximum'),
+                                       html.Li('10-20% discount range = optimal zone'),
+                                       html.Li(f'Estimated gain: {gain_option_c:,.0f}$/year')
+                                   ])
+                        ]),
+                        html.Div([
+                            html.Div('Option B: Supplier Renegotiation',
+                                   style={'color': '#ffaa44', 'fontWeight': 'bold', 'marginBottom': '5px'}),
+                            html.Ul(style={'margin': '0', 'paddingLeft': '20px', 'color': '#cccccc', 'fontSize': '11px'},
+                                   children=[
+                                       html.Li('Renegotiate Tables and Bookcases (10% reduction)'),
+                                       html.Li('Keep products (14% of total CA at stake)'),
+                                       html.Li(f'Estimated gain: {gain_option_b:,.0f}$/year')
+                                   ])
+                        ]),
+                        html.Div([
+                            html.Div('Option A: Segment Targeting',
+                                   style={'color': '#44ff88', 'fontWeight': 'bold', 'marginBottom': '5px'}),
+                            html.Ul(style={'margin': '0', 'paddingLeft': '20px', 'color': '#cccccc', 'fontSize': '11px'},
+                                   children=[
+                                       html.Li(f'Corporate margin: {corporate_margin:.1f}% vs Consumer: {consumer_margin:.1f}%'),
+                                       html.Li('Target Consumer with Technology products'),
+                                       html.Li(f'Estimated gain: {gain_option_a:,.0f}$/year')
+                                   ])
+                        ])
+                    ]
+                ),
+                html.Div(
+                    style={'marginTop': '12px', 'paddingTop': '10px', 'borderTop': '1px solid #2a2f4a',
+                           'textAlign': 'center', 'color': '#00d4ff', 'fontSize': '12px'},
+                    children=f"Total estimated annual impact: {total_gain:,.0f} USD"
+                )
+            ]
+        )
+    ]
+)
+
+if __name__ == '__main__':
+    app.run(debug=False, host='0.0.0.0', port=10000)
