@@ -9,8 +9,7 @@ from dash import Dash, dcc, html
 import os
 
 # Chargement - Adapter le chemin pour Render
-df = pd.read_csv("C:/Users/HP/Desktop/Business Analysis/SuperStore Sales/Superstore.csv", 
-                 encoding='latin-1')
+df = pd.read_csv("Superstore.csv", encoding='latin-1')
 
 # Nettoyage
 df['Order Date'] = pd.to_datetime(df['Order Date'], format='%d-%m-%Y', errors='coerce')
